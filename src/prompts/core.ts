@@ -1,10 +1,25 @@
-/* -------------------------------------------------------------------------- */
-/*                        CORE PROMPT BUILDER & CONFIG                        */
-/* -------------------------------------------------------------------------- */
+// src/prompts/core.ts
 
-import { DocType, DocTypeConfig } from '../types';
+/**
+ * ডকুমেন্ট টাইপ
+ */
+export type DocType = 'generic' | 'academic' | 'official' | 'marketing' | 'social';
 
-export const DOC_TYPE_CONFIG: Record<DocType, DocTypeConfig> = {
+/**
+ * ডকুমেন্ট টাইপ কনফিগ ইন্টারফেস
+ */
+export interface DocTypeConfig {
+  label: string;
+  description: string;
+  defaultTone: string;
+  mainHint: string;
+  contentHint: string;
+}
+
+/**
+ * ডকুমেন্ট টাইপ কনফিগারেশন
+ */
+export const DOC_TYPE_CONFIG: { [key in DocType]: DocTypeConfig } = {
   generic: {
     label: 'সাধারণ লেখা',
     description: 'যেকোনো সাধারণ লেখা – নিরপেক্ষভাবে বিশ্লেষণ করবে।',
@@ -42,10 +57,17 @@ export const DOC_TYPE_CONFIG: Record<DocType, DocTypeConfig> = {
   }
 };
 
-export const getDocTypeLabel = (docType: DocType): string => DOC_TYPE_CONFIG[docType].label;
+/**
+ * ডকুমেন্ট টাইপের লেবেল পেতে
+ */
+export const getDocTypeLabel = (t: DocType): string => DOC_TYPE_CONFIG[t].label;
 
+/**
+ * মূল বানান ও ব্যাকরণ প্রম্পট তৈরি
+ */
 export const buildMainPrompt = (text: string, docType: DocType): string => {
   const docCfg = DOC_TYPE_CONFIG[docType];
+  
   return `
 আপনি একজন দক্ষ বাংলা প্রুফরিডার।
 
@@ -128,28 +150,6 @@ ${docCfg.mainHint}
       "position": 120
     }
   ]
-}
-`;
-};
-
-export const buildContentAnalysisPrompt = (text: string, docType: DocType): string => {
-  const cfg = DOC_TYPE_CONFIG[docType];
-  return `
-বাংলা লেখাটি খুব সংক্ষেপে বিশ্লেষণ করুন।
-
-ধরুন এটি: ${cfg.label}
-
-${cfg.contentHint}
-
-"""${text}"""
-
-Response format (ONLY valid JSON, no extra text):
-
-{
-  "contentType": "লেখার ধরন (১-২ শব্দ)",
-  "description": "খুব সংক্ষিপ্ত বর্ণনা (১ লাইন)",
-  "missingElements": ["গুরুত্বপূর্ণ ১-২টি জিনিস যা নেই"],
-  "suggestions": ["১টি প্রধান পরামর্শ"]
 }
 `;
 };
