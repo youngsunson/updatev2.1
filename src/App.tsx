@@ -1,10 +1,6 @@
 // src/App.tsx
 import { useState, useEffect } from 'react';
 
-// src/App.tsx এর শুরুতে import অংশ
-
-import { useState, useEffect } from 'react';
-
 // ============ IMPORTS FROM UTILS ============
 import { normalize } from './utils/normalize';
 import { callGeminiJson } from './utils/api';
@@ -18,13 +14,7 @@ import {
 // ============ IMPORTS FROM PROMPTS ============
 import { buildTonePrompt, getToneName } from './prompts/tone';
 import { buildStylePrompt } from './prompts/style';
-import { 
-  buildMainPrompt, 
-  DOC_TYPE_CONFIG, 
-  getDocTypeLabel,
-  DocType,           // <-- এখানে DocType আলাদাভাবে import
-  DocTypeConfig      // <-- এটাও export করা হয়েছে
-} from './prompts/core';
+import { buildMainPrompt, DOC_TYPE_CONFIG, DocType, getDocTypeLabel } from './prompts/core';
 
 // ============ TYPE DEFINITIONS ============
 export interface Correction {
