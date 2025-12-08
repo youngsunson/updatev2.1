@@ -127,8 +127,8 @@ function App() {
 
   const [stats, setStats] = useState({ totalWords: 0, errorCount: 0, accuracy: 100 });
 
-  // Debounce ref for highlight
-  const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Debounce ref for highlight - ব্রাউজার compatible টাইপ
+  const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ============ HELPERS ============
   const showMessage = useCallback((text: string, type: 'success' | 'error') => {
