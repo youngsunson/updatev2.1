@@ -1,20 +1,26 @@
 // src/App.tsx
-import { useState, useEffect } from 'react';
+import { useState, useCallback, useRef } from 'react';
 
 // ============ IMPORTS FROM UTILS ============
 import { normalize } from './utils/normalize';
 import { callGeminiJson } from './utils/api';
-import { 
-  getTextFromWord, 
-  highlightInWord, 
-  replaceInWord, 
-  clearHighlights 
+import {
+  getTextFromWord,
+  highlightMultipleInWord,
+  highlightInWord,
+  replaceInWord,
+  clearHighlights
 } from './utils/word';
 
 // ============ IMPORTS FROM PROMPTS ============
 import { buildTonePrompt, getToneName } from './prompts/tone';
 import { buildStylePrompt } from './prompts/style';
-import { buildMainPrompt, DOC_TYPE_CONFIG, DocType, getDocTypeLabel } from './prompts/core';
+import {
+  buildMainPrompt,
+  DOC_TYPE_CONFIG,
+  getDocTypeLabel,
+  DocType
+} from './prompts/core';
 
 // ============ TYPE DEFINITIONS ============
 export interface Correction {
@@ -121,36 +127,44 @@ function App() {
 
   const [stats, setStats] = useState({ totalWords: 0, errorCount: 0, accuracy: 100 });
 
-  useEffect(() => {
-    // Initialize logic if needed
-  }, []);
+  // Debounce ref for highlight
+  const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // ============ HELPERS ============
-  const showMessage = (text: string, type: 'success' | 'error') => {
+  const showMessage = useCallback((text: string, type: 'success' | 'error') => {
     setMessage({ text, type });
     setTimeout(() => setMessage(null), 4000);
-  };
+  }, []);
 
   const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-  const saveSettings = () => {
+  const saveSettings = useCallback(() => {
     localStorage.setItem('gemini_api_key', apiKey);
     localStorage.setItem('gemini_model', selectedModel);
     localStorage.setItem('doc_type', docType);
     showMessage('সেটিংস সংরক্ষিত হয়েছে! ✓', 'success');
     setActiveModal('none');
-  };
+  }, [apiKey, selectedModel, docType, showMessage]);
 
-  const toggleSection = (key: SectionKey) => {
+  const toggleSection = useCallback((key: SectionKey) => {
     setCollapsedSections(prev => ({ ...prev, [key]: !prev[key] }));
-  };
+  }, []);
 
-  // ============ WORD DOCUMENT ACTIONS ============
-  const handleHighlight = async (text: string, color: string, position?: number) => {
-    await highlightInWord(text, color, position);
-  };
+  // ============ DEBOUNCED HIGHLIGHT ============
+  const handleHighlight = useCallback((text: string, color: string, position?: number) => {
+    // Cancel previous timeout
+    if (highlightTimeoutRef.current) {
+      clearTimeout(highlightTimeoutRef.current);
+    }
 
-  const handleReplace = async (oldText: string, newText: string, position?: number) => {
+    // Debounce highlight - 300ms পরে হাইলাইট করবে
+    highlightTimeoutRef.current = setTimeout(() => {
+      highlightInWord(text, color, position);
+    }, 300);
+  }, []);
+
+  // ============ REPLACE HANDLER ============
+  const handleReplace = useCallback(async (oldText: string, newText: string, position?: number) => {
     const success = await replaceInWord(oldText, newText, position);
 
     if (success) {
@@ -173,9 +187,10 @@ function App() {
     } else {
       showMessage(`শব্দটি ডকুমেন্টে খুঁজে পাওয়া যায়নি।`, 'error');
     }
-  };
+  }, [showMessage]);
 
-  const dismissSuggestion = (
+  // ============ DISMISS HANDLER ============
+  const dismissSuggestion = useCallback((
     type: 'spelling' | 'tone' | 'style' | 'mixing' | 'punct' | 'euphony',
     textToDismiss: string
   ) => {
@@ -206,10 +221,38 @@ function App() {
         setEuphonyImprovements(prev => prev.filter(e => isNotMatch(e.current)));
         break;
     }
-  };
+  }, []);
+
+  // ============ BATCH HIGHLIGHT (ALL AT ONCE) ============
+  const batchHighlightAll = useCallback(async (
+    spellingErrors: Correction[],
+    toneItems: ToneSuggestion[],
+    styleItems: StyleSuggestion[]
+  ) => {
+    const items: Array<{ text: string; color: string; position?: number }> = [];
+
+    // Spelling errors - red
+    spellingErrors.forEach(err => {
+      items.push({ text: err.wrong, color: '#fee2e2', position: err.position });
+    });
+
+    // Tone - yellow
+    toneItems.forEach(t => {
+      items.push({ text: t.current, color: '#fef3c7', position: t.position });
+    });
+
+    // Style - teal
+    styleItems.forEach(s => {
+      items.push({ text: s.current, color: '#ccfbf1', position: s.position });
+    });
+
+    if (items.length > 0) {
+      await highlightMultipleInWord(items);
+    }
+  }, []);
 
   // ============ API LOGIC ============
-  const checkSpelling = async () => {
+  const checkSpelling = useCallback(async () => {
     if (!apiKey) {
       showMessage('অনুগ্রহ করে প্রথমে API Key দিন', 'error');
       setActiveModal('settings');
@@ -237,29 +280,47 @@ function App() {
 
     await clearHighlights();
 
+    let allSpelling: Correction[] = [];
+    let allTone: ToneSuggestion[] = [];
+    let allStyle: StyleSuggestion[] = [];
+
     try {
       // 1. Main Check
       setLoadingText('বানান ও ব্যাকরণ দেখা হচ্ছে...');
-      await performMainCheck(text);
-      await delay(2000);
+      const mainResult = await performMainCheck(text);
+      if (mainResult) {
+        allSpelling = mainResult.spelling;
+      }
+      await delay(1500);
 
       // 2. Tone Check
       if (selectedTone) {
         setLoadingText('টোন বিশ্লেষণ হচ্ছে...');
-        await performToneCheck(text);
-        await delay(2000);
+        const toneResult = await performToneCheck(text);
+        if (toneResult) {
+          allTone = toneResult;
+        }
+        await delay(1500);
       }
 
       // 3. Style Check
       if (selectedStyle !== 'none') {
         setLoadingText('ভাষারীতি বিশ্লেষণ হচ্ছে...');
-        await performStyleCheck(text);
-        await delay(2000);
+        const styleResult = await performStyleCheck(text);
+        if (styleResult) {
+          allStyle = styleResult;
+        }
+        await delay(1500);
       }
 
       // 4. Content Analysis
       setLoadingText('সারাংশ তৈরি হচ্ছে...');
       await analyzeContent(text);
+
+      // 5. BATCH Highlight - একবারে সব হাইলাইট
+      setLoadingText('হাইলাইট করা হচ্ছে...');
+      await batchHighlightAll(allSpelling, allTone, allStyle);
+
     } catch (error: any) {
       console.error(error);
       showMessage(
@@ -270,13 +331,14 @@ function App() {
       setIsLoading(false);
       setLoadingText('');
     }
-  };
+  }, [apiKey, selectedModel, docType, selectedTone, selectedStyle, showMessage, batchHighlightAll]);
 
-  const performMainCheck = async (text: string) => {
+  // ============ PERFORM MAIN CHECK ============
+  const performMainCheck = async (text: string): Promise<{ spelling: Correction[] } | null> => {
     const prompt = buildMainPrompt(text, docType);
     const result = await callGeminiJson(prompt, apiKey, selectedModel, { temperature: 0.1 });
 
-    if (!result) return;
+    if (!result) return null;
 
     const allSpelling: Correction[] = (result.spellingErrors || []).map((e: any) => ({
       ...e,
@@ -323,12 +385,11 @@ function App() {
       accuracy: words > 0 ? Math.round(((words - errors) / words) * 100) : 100
     });
 
-    for (const err of allSpelling) {
-      await handleHighlight(err.wrong, '#fee2e2', err.position);
-    }
+    return { spelling: allSpelling };
   };
 
-  const performToneCheck = async (text: string) => {
+  // ============ PERFORM TONE CHECK ============
+  const performToneCheck = async (text: string): Promise<ToneSuggestion[] | null> => {
     const prompt = buildTonePrompt(text, selectedTone);
     const result = await callGeminiJson(
       `${prompt}\n\nযদি কোন পরিবর্তন প্রয়োজন না হয় তাহলে "toneConversions": [] খালি array রাখবেন।`,
@@ -336,7 +397,7 @@ function App() {
       selectedModel,
       { temperature: 0.2 }
     );
-    if (!result) return;
+    if (!result) return null;
 
     const toneConversions: ToneSuggestion[] = (result.toneConversions || []).map((t: any) => ({
       ...t,
@@ -346,12 +407,11 @@ function App() {
     toneConversions.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
     setToneSuggestions(toneConversions);
 
-    for (const t of toneConversions) {
-      await handleHighlight(t.current, '#fef3c7', t.position);
-    }
+    return toneConversions;
   };
 
-  const performStyleCheck = async (text: string) => {
+  // ============ PERFORM STYLE CHECK ============
+  const performStyleCheck = async (text: string): Promise<StyleSuggestion[] | null> => {
     const prompt = buildStylePrompt(text, selectedStyle);
     const result = await callGeminiJson(
       `${prompt}\n\nযদি কোন পরিবর্তন প্রয়োজন না হয় তাহলে "styleConversions": [] খালি array রাখবেন।`,
@@ -359,7 +419,7 @@ function App() {
       selectedModel,
       { temperature: 0.2 }
     );
-    if (!result) return;
+    if (!result) return null;
 
     const styleConversions: StyleSuggestion[] = (result.styleConversions || []).map((s: any) => ({
       ...s,
@@ -369,12 +429,11 @@ function App() {
     styleConversions.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
     setStyleSuggestions(styleConversions);
 
-    for (const s of styleConversions) {
-      await handleHighlight(s.current, '#ccfbf1', s.position);
-    }
+    return styleConversions;
   };
 
-  const analyzeContent = async (text: string) => {
+  // ============ ANALYZE CONTENT ============
+  const analyzeContent = async (text: string): Promise<void> => {
     const cfg = DOC_TYPE_CONFIG[docType];
     const prompt = `
 বাংলা লেখাটি খুব সংক্ষেপে বিশ্লেষণ করুন।
@@ -401,12 +460,12 @@ Response format (ONLY valid JSON, no extra text):
   };
 
   // ============ RENDER HELPERS ============
-  const shouldShowSection = (key: SectionKey): boolean => {
+  const shouldShowSection = useCallback((key: SectionKey): boolean => {
     if (viewFilter === 'all') return true;
     if (viewFilter === 'spelling') return key === 'spelling';
     if (viewFilter === 'punctuation') return key === 'punctuation';
     return true;
-  };
+  }, [viewFilter]);
 
   // ============ UI RENDER ============
   return (
@@ -975,9 +1034,9 @@ Response format (ONLY valid JSON, no extra text):
 
               <label>🤖 AI Model</label>
               <select value={selectedModel} onChange={e => setSelectedModel(e.target.value)}>
-                <option value="gemini-2.5-flash">Gemini 2.5 Flash (Your Current Model)</option>
+                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
                 <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite</option>
-                <option value="gemma-3-4b">Gemma 3 (4b)</option>
+                <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
               </select>
 
               <label>📂 ডকুমেন্ট টাইপ (ডিফল্ট)</label>
@@ -1024,7 +1083,7 @@ Response format (ONLY valid JSON, no extra text):
               <ol style={{ paddingLeft: '18px', lineHeight: '2', fontSize: '13px' }}>
                 <li style={{ marginBottom: '10px' }}>⚙️ সেটিংস থেকে API Key দিন</li>
                 <li style={{ marginBottom: '10px' }}>
-                  📂 প্রয়োজন হলে ডক টাইপ নির্বাচন করুন (একাডেমিক/অফিসিয়াল/মার্কেটিং ইত্যাদি)
+                  📂 প্রয়োজন হলে ডক টাইপ নির্বাচন করুন
                 </li>
                 <li style={{ marginBottom: '10px' }}>
                   ✍️ বাংলা টেক্সট সিলেক্ট করুন অথবা সম্পূর্ণ ডকুমেন্ট চেক করুন
@@ -1036,10 +1095,7 @@ Response format (ONLY valid JSON, no extra text):
                   📝 <strong>ভাষারীতি</strong> (মেনু থেকে) নির্বাচন করুন (ঐচ্ছিক)
                 </li>
                 <li style={{ marginBottom: '10px' }}>🔍 "পরীক্ষা করুন" বাটনে ক্লিক করুন</li>
-                <li style={{ marginBottom: '10px' }}>
-                  🔎 উপরের ফিল্টার থেকে "শুধু বানান / শুধু বিরামচিহ্ন / সব" বেছে নিন
-                </li>
-                <li>✓ সাজেশনে ক্লিক করে প্রতিস্থাপন করুন বা ✕ দিয়ে বাতিল করুন</li>
+                <li>✓ সাজেশনে ক্লিক করে প্রতিস্থাপন করুন</li>
               </ol>
             </div>
           </div>
@@ -1057,14 +1113,14 @@ Response format (ONLY valid JSON, no extra text):
             <div className="modal-body">
               {[
                 { id: '', icon: '❌', title: 'কোনটি নয়', desc: 'শুধু বানান ও ব্যাকরণ পরীক্ষা' },
-                { id: 'formal', icon: '📋', title: 'আনুষ্ঠানিক (Formal)', desc: 'দাপ্তরিক চিঠি, আবেদন, প্রতিবেদন' },
-                { id: 'informal', icon: '💬', title: 'অনানুষ্ঠানিক (Informal)', desc: 'ব্যক্তিগত চিঠি, ব্লগ, সোশ্যাল মিডিয়া' },
-                { id: 'professional', icon: '💼', title: 'পেশাদার (Professional)', desc: 'ব্যবসায়িক যোগাযোগ, কর্পোরেট' },
-                { id: 'friendly', icon: '😊', title: 'বন্ধুত্বপূর্ণ (Friendly)', desc: 'উষ্ণ, আন্তরিক যোগাযোগ' },
-                { id: 'respectful', icon: '🙏', title: 'সম্মানজনক (Respectful)', desc: 'বয়োজ্যেষ্ঠ বা সম্মানিত ব্যক্তি' },
-                { id: 'persuasive', icon: '💪', title: 'প্রভাবশালী (Persuasive)', desc: 'মার্কেটিং, বিক্রয়, প্রচারণা' },
-                { id: 'neutral', icon: '⚖️', title: 'নিরপেক্ষ (Neutral)', desc: 'সংবাদ, তথ্যমূলক লেখা' },
-                { id: 'academic', icon: '📚', title: 'শিক্ষামূলক (Academic)', desc: 'গবেষণা পত্র, প্রবন্ধ' }
+                { id: 'formal', icon: '📋', title: 'আনুষ্ঠানিক', desc: 'দাপ্তরিক চিঠি, আবেদন' },
+                { id: 'informal', icon: '💬', title: 'অনানুষ্ঠানিক', desc: 'ব্যক্তিগত চিঠি, ব্লগ' },
+                { id: 'professional', icon: '💼', title: 'পেশাদার', desc: 'ব্যবসায়িক যোগাযোগ' },
+                { id: 'friendly', icon: '😊', title: 'বন্ধুত্বপূর্ণ', desc: 'উষ্ণ, আন্তরিক' },
+                { id: 'respectful', icon: '🙏', title: 'সম্মানজনক', desc: 'বয়োজ্যেষ্ঠদের জন্য' },
+                { id: 'persuasive', icon: '💪', title: 'প্রভাবশালী', desc: 'মার্কেটিং, বিক্রয়' },
+                { id: 'neutral', icon: '⚖️', title: 'নিরপেক্ষ', desc: 'সংবাদ, তথ্যমূলক' },
+                { id: 'academic', icon: '📚', title: 'শিক্ষামূলক', desc: 'গবেষণা পত্র' }
               ].map(opt => (
                 <div
                   key={opt.id}
@@ -1097,15 +1153,15 @@ Response format (ONLY valid JSON, no extra text):
             </div>
             <div className="modal-body">
               {[
-                { id: 'none', icon: '❌', title: 'কোনটি নয়', desc: 'স্বয়ংক্রিয় মিশ্রণ সনাক্তকরণ চালু থাকবে' },
-                { id: 'sadhu', icon: '📜', title: 'সাধু রীতি', desc: 'করিতেছি, করিয়াছি, তাহার, যাহা' },
-                { id: 'cholito', icon: '💬', title: 'চলিত রীতি', desc: 'করছি, করেছি, তার, যা' }
+                { id: 'none', icon: '❌', title: 'কোনটি নয়', desc: 'স্বয়ংক্রিয় সনাক্তকরণ' },
+                { id: 'sadhu', icon: '📜', title: 'সাধু রীতি', desc: 'করিতেছি, তাহার' },
+                { id: 'cholito', icon: '💬', title: 'চলিত রীতি', desc: 'করছি, তার' }
               ].map(opt => (
                 <div
                   key={opt.id}
                   className={`option-item ${selectedStyle === opt.id ? 'selected' : ''}`}
                   onClick={() => {
-                    setSelectedStyle(opt.id as any);
+                    setSelectedStyle(opt.id as 'none' | 'sadhu' | 'cholito');
                     setActiveModal('none');
                   }}
                 >
@@ -1117,30 +1173,6 @@ Response format (ONLY valid JSON, no extra text):
                   {selectedStyle === opt.id && <div className="check-mark">✓</div>}
                 </div>
               ))}
-
-              <div
-                style={{
-                  padding: '10px',
-                  background: 'linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%)',
-                  borderRadius: '10px',
-                  border: '2px solid #c4b5fd',
-                  marginTop: '10px'
-                }}
-              >
-                <h4 style={{ fontSize: '12px', fontWeight: 'bold', color: '#5b21b6', marginBottom: '6px' }}>
-                  📖 পার্থক্য
-                </h4>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '11px' }}>
-                  <div>
-                    <p style={{ fontWeight: 600, color: '#7c3aed', marginBottom: '2px' }}>সাধু:</p>
-                    <p style={{ color: '#6b7280' }}>করিতেছি, তাহার</p>
-                  </div>
-                  <div>
-                    <p style={{ fontWeight: 600, color: '#0d9488', marginBottom: '2px' }}>চলিত:</p>
-                    <p style={{ color: '#6b7280' }}>করছি, তার</p>
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
         </div>
