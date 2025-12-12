@@ -492,7 +492,7 @@ Response format (ONLY valid JSON, no extra text):
         <div className="toolbar">
           <div className="toolbar-top">
             <button onClick={checkSpelling} disabled={isLoading} className="btn-check">
-              {isLoading ? '...' : '🔍 পরীক্ষা করুন'}
+              {isLoading ? '⏳ অপেক্ষা করুন...' : '🔍 পরীক্ষা করুন'}
             </button>
           </div>
 
